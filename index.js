@@ -42,6 +42,7 @@ import {
   DEFAULT_CATEGORIES,
   assignCapabilities,
   buildPresetDefinition,
+  capabilityFingerprint,
 } from './lib/categories.js';
 
 export const name = 'preset-categorizer';
@@ -200,6 +201,7 @@ function installedPackages(ctx) {
   }
 }
 
+
 /**
  * The MCP row ids that other presets already own.
  *
@@ -233,6 +235,24 @@ async function mcpRowsOwnedElsewhere(ctx) {
 }
 
 /**
+ * The capability fingerprints of the presets that already exist.
+ *
+ * @param ctx - the host context
+ * @returns a Map<fingerprint, presetId>
+ */
+function fingerprintsOfExisting(ctx) {
+  const map = new Map();
+  const definitions = ctx.agentPresets?.definitions;
+  if (!definitions || typeof definitions.entries !== 'function') return map;
+  for (const [id, record] of definitions) {
+    if (typeof id === 'string' && id.startsWith(OWNED_PREFIX)) continue; // our own
+    const fingerprint = capabilityFingerprint(record?.config?.plugins ?? []);
+    if (fingerprint && !map.has(fingerprint)) map.set(fingerprint, id);
+  }
+  return map;
+}
+
+/**
  * Register one preset per category.
  *
  * A category that would produce an empty preset is skipped: a preset with
@@ -254,6 +274,9 @@ async function registerCategoryPresets(ctx, categories, report) {
   // MCP rows another preset already owns. Carrying one again would start that
   // server a second time (see mcpRowsOwnedElsewhere).
   const ownedMcpRows = await mcpRowsOwnedElsewhere(ctx);
+  // The capabilities existing presets already offer. A category that offers
+  // exactly the same thing is the same entry twice in the picker.
+  const existingFingerprints = fingerprintsOfExisting(ctx);
   for (const category of categories) {
     const presetId = category.preset.id;
     if (!presetId.startsWith(OWNED_PREFIX)) {
@@ -298,6 +321,22 @@ async function registerCategoryPresets(ctx, categories, report) {
         );
       }
       rows = rows.filter((row) => !duplicateMcp.includes(row));
+    }
+
+    // If what is left is exactly what an existing preset already offers, do
+    // not register a second copy. Two entries offering the same capabilities
+    // are indistinguishable in the picker, and the user cannot tell which is
+    // the real one. Measured 2026-10-22: the picker showed "Creative (CAD /
+    // 3D / diagrams)" and "Creative (3D / diagrams)" side by side.
+    const fingerprint = capabilityFingerprint(rows);
+    if (fingerprint && existingFingerprints.has(fingerprint)) {
+      report.notes.push(
+        `skipped "${presetId}": offers the same capabilities as the existing ` +
+        `"${existingFingerprints.get(fingerprint)}" preset — registering it would show the same ` +
+        'entry twice in the picker',
+      );
+      skipped += 1;
+      continue;
     }
 
     if (rows.length === 0) {

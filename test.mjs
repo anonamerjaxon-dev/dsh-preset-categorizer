@@ -10,6 +10,7 @@ import {
   assignCapabilities,
   buildPresetDefinition,
   buildPresetRows,
+  capabilityFingerprint,
   matchesCategory,
   patternToRegExp,
 } from './lib/categories.js';
@@ -57,11 +58,11 @@ test('? matches exactly one character', () => {
 // --- kind matching ----------------------------------------------------------
 
 test('a category only claims capabilities of its own kind', () => {
-  const category = DEFAULT_CATEGORIES.find((c) => c.id === 'cat-web');
-  const skill = { kind: 'skill', id: 'playwright', name: 'playwright' };
-  const mcp = { kind: 'mcp', id: 'mcp-playwright', name: '@playwright/mcp' };
+  const category = DEFAULT_CATEGORIES.find((c) => c.id === 'cat-media');
+  const plugin = { kind: 'plugin', id: 'dsh-ffmpeg', name: 'dsh-ffmpeg' };
+  const skill = { kind: 'skill', id: 'dsh-ffmpeg', name: 'dsh-ffmpeg' };
   assert.equal(matchesCategory(skill, category), false);
-  assert.equal(matchesCategory(mcp, category), true);
+  assert.equal(matchesCategory(plugin, category), true);
 });
 
 test('a capability matches on any of its identifiers', () => {
@@ -80,10 +81,13 @@ test('a capability matches on any of its identifiers', () => {
 
 test('each capability lands in exactly one category', () => {
   const capabilities = [
-    { kind: 'mcp', id: 'mcp-playwright', name: '@playwright/mcp' },
-    { kind: 'mcp', id: 'mcp-drawio', name: '@deepseek-ai/dsh-mcp-client' },
     { kind: 'plugin', id: 'dsh-ffmpeg', name: 'dsh-ffmpeg' },
+    { kind: 'plugin', id: 'dsh-remotion', name: 'dsh-remotion' },
+    { kind: 'plugin', id: 'dsh-image-gen', name: 'dsh-image-gen' },
     { kind: 'skill', id: 'genoffice', name: 'genoffice' },
+    { kind: 'skill', id: 'mineru', name: 'mineru' },
+    { kind: 'skill', id: 'typst', name: 'typst' },
+    { kind: 'skill', id: 'audio-edit', name: 'audio-edit' },
     { kind: 'skill', id: 'totally-unknown', name: 'totally-unknown' },
   ];
   const { assigned, unassigned } = assignCapabilities(capabilities);
@@ -255,6 +259,41 @@ test('MCP rows another preset already owns are dropped, not repeated', () => {
   assert.ok(owned.has('mcp-drawio'));
 });
 
+test('the capability fingerprint ignores the shared harness scaffolding', () => {
+  // Every preset carries persona, tool-bash, compaction and friends. Those
+  // say nothing about what the preset is FOR, so they must not enter the
+  // fingerprint — otherwise every preset would look the same.
+  const rows = [
+    { id: 'persona', name: '@deepseek-ai/dsh-persona' },
+    { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash' },
+    { id: 'compaction', name: '@deepseek-ai/dsh-compaction' },
+  ];
+  assert.equal(capabilityFingerprint(rows), '');
+});
+
+test('the capability fingerprint names what a preset actually offers', () => {
+  const rows = [
+    { id: 'persona', name: '@deepseek-ai/dsh-persona' },
+    { id: 'mcp-drawio', name: '@deepseek-ai/dsh-mcp-client' },
+    { id: 'skill-filesystem-optional', name: '@deepseek-ai/dsh-skill-filesystem' },
+  ];
+  assert.equal(capabilityFingerprint(rows), 'mcp-drawio|skill-filesystem-optional');
+});
+
+test('two presets offering the same capabilities have the same fingerprint', () => {
+  const creative = [
+    { id: 'persona', name: 'p' },
+    { id: 'mcp-drawio', name: 'm' },
+    { id: 'mcp-blender', name: 'm' },
+  ];
+  const mine = [
+    { id: 'tool-bash', name: 't' },
+    { id: 'mcp-blender', name: 'm' },
+    { id: 'mcp-drawio', name: 'm' },
+  ];
+  assert.equal(capabilityFingerprint(creative), capabilityFingerprint(mine));
+});
+
 test('a category inherits the base preset rows instead of repeating them', () => {
   const category = { id: 'c', preset: { id: 'cat-c', base: 'creative', pluginRows: [], mcpRows: [] } };
   const baseRows = [
@@ -294,11 +333,6 @@ test('a skill root claimed by an earlier category is not mounted twice', () => {
 
 test('no two built-in categories match the same capability', () => {
   const capabilities = [
-    { kind: 'mcp', id: 'mcp-playwright', name: '@playwright/mcp' },
-    { kind: 'mcp', id: 'mcp-drawio', name: 'mcp' },
-    { kind: 'mcp', id: 'mcp-blender', name: 'mcp' },
-    { kind: 'mcp', id: 'mcp-figcraft', name: 'mcp' },
-    { kind: 'mcp', id: 'mcp-genoffice', name: 'mcp' },
     { kind: 'plugin', id: 'dsh-ffmpeg', name: 'dsh-ffmpeg' },
     { kind: 'plugin', id: 'dsh-remotion', name: 'dsh-remotion' },
     { kind: 'plugin', id: 'dsh-image-gen', name: 'dsh-image-gen' },
@@ -306,6 +340,7 @@ test('no two built-in categories match the same capability', () => {
     { kind: 'skill', id: 'mineru', name: 'mineru' },
     { kind: 'skill', id: 'typst', name: 'typst' },
     { kind: 'skill', id: 'codebase-memory', name: 'codebase-memory' },
+    { kind: 'skill', id: 'browser-cdp', name: 'browser-cdp' },
     { kind: 'skill', id: 'audio-edit', name: 'audio-edit' },
   ];
   for (const capability of capabilities) {
