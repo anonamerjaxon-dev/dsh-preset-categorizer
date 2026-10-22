@@ -254,6 +254,14 @@ function installedPackages(ctx) {
  */
 async function mcpRowsOwnedElsewhere(ctx) {
   const owned = new Set();
+  // Bundle-level rows: the loader sees them live, whatever the preset
+  // registration order is.
+  try {
+    for (const entry of ctx.loader?.entries?.() ?? []) {
+      const id = typeof entry?.id === 'string' ? entry.id : '';
+      if (id.startsWith('mcp-')) owned.add(id);
+    }
+  } catch { /* the loader is not readable in every scope */ }
   const definitions = ctx.agentPresets?.definitions;
   if (!definitions || typeof definitions.entries !== 'function') return owned;
   for (const [id, record] of definitions) {
@@ -278,6 +286,21 @@ async function mcpRowsOwnedElsewhere(ctx) {
  */
 function pluginRowsOwnedElsewhere(ctx) {
   const owned = new Set();
+  // Bundle-level entries come first: they are live no matter how the presets
+  // are ordered. Without this, a preset that mounts a plugin already in
+  // `bundles` (dsh-image-gen, after the GUI re-added it) would register it a
+  // second time and both mounts would fail with "duplicate exact route".
+  try {
+    for (const entry of ctx.loader?.entries?.() ?? []) {
+      const id = typeof entry?.id === 'string' ? entry.id : '';
+      if (!id) continue;
+      if (id.startsWith('mcp-')) continue;
+      if (id.startsWith('tool-')) continue;
+      if (id.startsWith('command-')) continue;
+      if (id.startsWith('skill-filesystem')) continue;
+      owned.add(id);
+    }
+  } catch { /* the loader is not readable in every scope */ }
   const definitions = ctx.agentPresets?.definitions;
   if (!definitions || typeof definitions.entries !== 'function') return owned;
   for (const [id, record] of definitions) {
@@ -470,6 +493,32 @@ async function registerCategoryPresets(ctx, categories, report) {
  * @param ctx - the host context
  * @param config - plugin config (currently unused; kept for future options)
  */
+/**
+ * Write the categorisation report.
+ *
+ * This is the plugin's own state, not host state: it records what was
+ * categorised, what each category would carry, and the host's preset roster
+ * when it could be read. It is written whether or not presets are registered,
+ * so the report always says what WOULD have been created.
+ *
+ * @param ctx - the host context (for the logger)
+ * @param report - the categorisation report
+ * @param roster - the host's preset roster, or null
+ */
+function writeReport(ctx, report, roster) {
+  const target = join(homedir(), '.dsh', 'preset-categorizer-report.json');
+  try {
+    writeFileSync(
+      target,
+      JSON.stringify({ at: new Date().toISOString(), registered: false, report, roster }, null, 2) + '\n',
+    );
+  } catch (e) {
+    try {
+      ctx.logger.warn(`preset-categorizer: could not write ${target}: ${String(e && e.message || e)}`);
+    } catch { /* nothing else to do */ }
+  }
+}
+
 export function apply(ctx, config = {}) {
   const categories = config.categories ?? DEFAULT_CATEGORIES;
 
@@ -502,9 +551,50 @@ export function apply(ctx, config = {}) {
     notes: [],
   };
 
-  // Registration is async but must not block the boot: a failure here is
-  // contained, and the plugin still mounts cleanly.
-  void registerCategoryPresets(ctx, categories, report)
+  // Registering presets at runtime is OPT-IN, and off by default.
+  //
+  // It was on by default once, and it broke the host twice in one day:
+  //   - a copied preset lost its `isolate` fields, so `compaction` failed
+  //     with "Preset services require isolate realms";
+  //   - a preset mounting a plugin that `bundles` already mounts started the
+  //     plugin twice, so its web route collided ("duplicate exact route") and
+  //     BOTH the built-in preset and the new one showed BROKEN in the picker.
+  //
+  // A preset's plugin list is registered while its own preset is still being
+  // mounted, so a categorizer that runs inside a preset cannot reliably see
+  // the full preset set either — the duplicate check races the registration.
+  //
+  // So the safe default is: CATEGORISE and REPORT. Creating a preset is a
+  // deliberate act, enabled with `registerPresets: true` in the plugin
+  // config, and it should be applied to cordis.patch.yml rather than at
+  // runtime. The report always says what would have been created.
+  if (config.registerPresets !== true) {
+    report.notes.push(
+      'preset registration is disabled (registerPresets is not true) — ' +
+      'the categories are reported, not registered. See TOOL-COHESION §2.17.',
+    );
+    // Still record the host's roster, so the report proves the picker is clean.
+    void (async () => {
+      let roster = null;
+      try { roster = await ctx.agentPresets.list(); } catch { /* optional */ }
+      writeReport(ctx, report, roster);
+      ctx.logger.info(
+        `preset-categorizer: categorised ${report.capabilities} capabilities ` +
+        `(${report.plugins} plugins, ${report.mcps} MCPs, ${report.skills} skills) ` +
+        `${report.unassigned.length} unassigned; registration disabled`,
+      );
+    })();
+    return;
+  }
+
+  // Wait for the loader to settle FIRST, so the ownership checks see every
+  // preset and every bundle-level entry.
+  void (async () => {
+    try {
+      await ctx.loader?.await?.();
+    } catch { /* the loader may already be settled */ }
+    return registerCategoryPresets(ctx, categories, report);
+  })()
     .then(async (outcome) => {
       report.registered = outcome.registered;
       report.skipped = outcome.skipped;
@@ -521,22 +611,11 @@ export function apply(ctx, config = {}) {
       }
       for (const note of report.notes) ctx.logger.warn(`preset-categorizer: ${note}`);
 
-      // Write the roster to a file so the outcome is verifiable without a
-      // logger. This is the plugin's own state, not host state.
+      let roster = null;
       try {
-        const roster = await ctx.agentPresets.list();
-        writeFileSync(
-          join(homedir(), '.dsh', 'preset-categorizer-report.json'),
-          JSON.stringify({ at: new Date().toISOString(), report, roster }, null, 2) + '\n',
-        );
-      } catch (e) {
-        try {
-          writeFileSync(
-            join(homedir(), '.dsh', 'preset-categorizer-report.json'),
-            JSON.stringify({ at: new Date().toISOString(), error: String((e && e.message) || e) }, null, 2) + '\n',
-          );
-        } catch {}
-      }
+        roster = await ctx.agentPresets.list();
+      } catch { /* the roster is a nicety, not the report */ }
+      writeReport(ctx, report, roster);
 
     })
     .catch((error) => {

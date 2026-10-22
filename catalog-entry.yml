@@ -2,5 +2,5 @@ url: https://github.com/anonamerjaxon-dev/dsh-preset-categorizer
 name: anonamerjaxon-dev/dsh-preset-categorizer
 category: tools
 description:
-  en: 'Categorize plugins, MCP servers and skills into DeepSeek Harness agent presets. Reads what is installed, groups the capabilities, and registers one first-class preset per category with the host''s own preset registry.'
+  en: 'Reads the installed plugins, MCP servers and skills, groups them by capability, and reports which preset each belongs in; can register one preset per category on request.'
   zh: '把插件、MCP 服务器与技能归类进 DeepSeek Harness 的 agent 预设。读取已安装的能力，按类别分组，并用宿主自带的预设注册表为每个类别注册一个一等预设。'
