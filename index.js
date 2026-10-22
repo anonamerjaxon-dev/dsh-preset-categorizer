@@ -201,6 +201,38 @@ function installedPackages(ctx) {
 }
 
 /**
+ * The MCP row ids that other presets already own.
+ *
+ * **This is the rule that makes the categorizer safe.** An MCP server is
+ * materialised as a PROCESS when its preset mounts — and every preset's rows
+ * mount at profile boot, not per session. So an MCP row id that appears in
+ * two presets starts that server TWICE. Measured 2026-10-22: with
+ * `cat-creative` inheriting the built-in `creative`, drawio, blender and
+ * figcraft each ran twice, and genoffice and playwright did too — 8 MCP
+ * processes instead of 4, and the 4-server budget blown.
+ *
+ * The built-in presets use DISJOINT MCP row ids, which is why they do not
+ * collide with each other. The categorizer must respect the same rule: it may
+ * add a preset that carries a capability, but it may not carry an MCP server
+ * that another preset already carries.
+ *
+ * @param ctx - the host context
+ * @returns a Set of MCP row ids owned by other presets
+ */
+async function mcpRowsOwnedElsewhere(ctx) {
+  const owned = new Set();
+  const definitions = ctx.agentPresets?.definitions;
+  if (!definitions || typeof definitions.entries !== 'function') return owned;
+  for (const [id, record] of definitions) {
+    if (typeof id === 'string' && id.startsWith(OWNED_PREFIX)) continue; // our own
+    for (const row of record?.config?.plugins ?? []) {
+      if (typeof row?.id === 'string' && row.id.startsWith('mcp-')) owned.add(row.id);
+    }
+  }
+  return owned;
+}
+
+/**
  * Register one preset per category.
  *
  * A category that would produce an empty preset is skipped: a preset with
@@ -219,6 +251,9 @@ async function registerCategoryPresets(ctx, categories, report) {
   let skipped = 0;
   const usedSkillRoots = new Set();
   const installed = installedPackages(ctx);
+  // MCP rows another preset already owns. Carrying one again would start that
+  // server a second time (see mcpRowsOwnedElsewhere).
+  const ownedMcpRows = await mcpRowsOwnedElsewhere(ctx);
   for (const category of categories) {
     const presetId = category.preset.id;
     if (!presetId.startsWith(OWNED_PREFIX)) {
@@ -252,6 +287,19 @@ async function registerCategoryPresets(ctx, categories, report) {
       }
     }
 
+    // Drop MCP rows another preset already carries. The server would start a
+    // second time — 8 MCP processes instead of 4, measured 2026-10-22.
+    const duplicateMcp = rows.filter((row) => row.id.startsWith('mcp-') && ownedMcpRows.has(row.id));
+    if (duplicateMcp.length > 0) {
+      for (const row of duplicateMcp) {
+        report.notes.push(
+          `${presetId}: dropped "${row.id}" — another preset already carries that MCP server, ` +
+          'and an MCP row in two presets starts the server twice',
+        );
+      }
+      rows = rows.filter((row) => !duplicateMcp.includes(row));
+    }
+
     if (rows.length === 0) {
       report.notes.push(`skipped "${presetId}": no loader rows`);
       skipped += 1;
@@ -264,7 +312,7 @@ async function registerCategoryPresets(ctx, categories, report) {
         name: definition.name,
         rows: rows.length,
         rowIds: rows.map((r) => r.id),
-        members: (report.assigned.get(category.id) ?? []).map((c) => c.id),
+        members: (report.assigned[category.id] ?? []).map((c) => c.id),
       });
       registered += 1;
     } catch (error) {

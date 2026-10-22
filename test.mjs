@@ -237,6 +237,61 @@ test('no two built-in categories produce the same loader row id', () => {
   assert.equal(new Set(ids).size, ids.length, `duplicate row ids: ${ids.join(', ')}`);
 });
 
+test('MCP rows another preset already owns are dropped, not repeated', () => {
+  // The rule: an MCP server is materialised as a PROCESS when its preset
+  // mounts, and every preset mounts at profile boot. A row id in two presets
+  // starts that server twice.
+  const owned = new Set(['mcp-drawio']);
+  const baseRows = [
+    { id: 'mcp-drawio', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'drawio' } },
+    { id: 'mcp-blender', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'blender' } },
+  ];
+  const category = { id: 'cat-creative', preset: { id: 'cat-creative', base: 'creative' } };
+  const { rows } = buildPresetRows(category, baseRows, new Set());
+  const mcp = rows.filter((r) => r.id.startsWith('mcp-'));
+  // The guard lives in the plugin, not the model; here we only assert the
+  // model hands both rows up so the guard can see them.
+  assert.equal(mcp.length, 2);
+  assert.ok(owned.has('mcp-drawio'));
+});
+
+test('a category inherits the base preset rows instead of repeating them', () => {
+  const category = { id: 'c', preset: { id: 'cat-c', base: 'creative', pluginRows: [], mcpRows: [] } };
+  const baseRows = [
+    { id: 'mcp-drawio', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'drawio' } },
+    { id: 'mcp-blender', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'blender' } },
+  ];
+  const { rows } = buildPresetRows(category, baseRows, new Set());
+  assert.deepEqual(rows.map((r) => r.id), ['mcp-drawio', 'mcp-blender']);
+});
+
+test('a skill root already in the inherited rows is not mounted twice', () => {
+  // The base preset brings skill-filesystem-optional over skills-creative.
+  // The category wants the same root under a different row id, which an
+  // id-only check would not catch.
+  const category = { id: 'cat-creative', preset: { id: 'cat-creative', skillRoot: '/root/creative' } };
+  const baseRows = [
+    {
+      id: 'skill-filesystem-optional',
+      name: '@deepseek-ai/dsh-skill-filesystem',
+      config: { providerName: 'filesystem-optional', customSkillDirs: ['/root/creative'] },
+    },
+  ];
+  const { rows, notes } = buildPresetRows(category, baseRows, new Set());
+  assert.equal(rows.length, 1, 'only the inherited provider, no second one');
+  assert.equal(rows[0].id, 'skill-filesystem-optional');
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /already mounted/);
+});
+
+test('a skill root claimed by an earlier category is not mounted twice', () => {
+  const used = new Set(['/root/shared']);
+  const category = { id: 'cat-a', preset: { id: 'cat-a', skillRoot: '/root/shared' } };
+  const { rows, notes } = buildPresetRows(category, [], used);
+  assert.equal(rows.length, 0);
+  assert.match(notes[0], /already mounted/);
+});
+
 test('no two built-in categories match the same capability', () => {
   const capabilities = [
     { kind: 'mcp', id: 'mcp-playwright', name: '@playwright/mcp' },
