@@ -11,6 +11,7 @@ import {
   buildPresetDefinition,
   buildPresetRows,
   capabilityFingerprint,
+  coveringPreset,
   matchesCategory,
   patternToRegExp,
 } from './lib/categories.js';
@@ -278,6 +279,21 @@ test('the capability fingerprint names what a preset actually offers', () => {
     { id: 'skill-filesystem-optional', name: '@deepseek-ai/dsh-skill-filesystem' },
   ];
   assert.equal(capabilityFingerprint(rows), 'mcp-drawio|skill-filesystem-optional');
+});
+
+test('a fingerprint that is a SUBSET of an existing preset is covered by it', () => {
+  // The Creative preset carries image-gen plus three MCP servers. A category
+  // offering only image-gen adds nothing the picker does not already show.
+  const existing = new Map([
+    ['image-gen|mcp-blender|mcp-drawio|mcp-figcraft', 'creative'],
+  ]);
+  assert.equal(coveringPreset('image-gen', existing), 'creative');
+  assert.equal(coveringPreset('mcp-blender', existing), 'creative');
+  assert.equal(coveringPreset('image-gen|mcp-blender', existing), 'creative');
+  // Something genuinely new is not covered.
+  assert.equal(coveringPreset('mcp-brandnew', existing), undefined);
+  // An empty fingerprint says nothing.
+  assert.equal(coveringPreset('', existing), undefined);
 });
 
 test('two presets offering the same capabilities have the same fingerprint', () => {

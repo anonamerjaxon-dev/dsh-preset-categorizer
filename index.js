@@ -43,6 +43,7 @@ import {
   assignCapabilities,
   buildPresetDefinition,
   capabilityFingerprint,
+  coveringPreset,
 } from './lib/categories.js';
 
 export const name = 'preset-categorizer';
@@ -174,6 +175,36 @@ const HOST_PROVIDED = new Set([
   '@deepseek-ai/dsh-skill-filesystem',
   '@deepseek-ai/dsh-agent-preset',
   '@deepseek-ai/dsh-client-runtime',
+  '@deepseek-ai/dsh-persona',
+  '@deepseek-ai/dsh-agent-instructions',
+  '@deepseek-ai/dsh-time-context',
+  '@deepseek-ai/dsh-tool-bash',
+  '@deepseek-ai/dsh-tool-pwsh',
+  '@deepseek-ai/dsh-tool-fs',
+  '@deepseek-ai/dsh-tool-fs-search',
+  '@deepseek-ai/dsh-tool-jobs',
+  '@deepseek-ai/dsh-tool-schedule',
+  '@deepseek-ai/dsh-tool-skill',
+  '@deepseek-ai/dsh-command-goal',
+  '@deepseek-ai/dsh-tool-goal',
+  '@deepseek-ai/dsh-tool-ask-user',
+  '@deepseek-ai/dsh-tool-todo',
+  '@deepseek-ai/dsh-tool-web',
+  '@deepseek-ai/dsh-tool-present',
+  '@deepseek-ai/dsh-tool-presentation',
+  '@deepseek-ai/dsh-tool-workflow',
+  '@deepseek-ai/dsh-workflow-ptc',
+  '@deepseek-ai/dsh-tool-subagent',
+  '@deepseek-ai/dsh-tool-subagent-fork',
+  '@deepseek-ai/dsh-tool-subagent-control',
+  '@deepseek-ai/dsh-tool-subagent-list-agents',
+  '@deepseek-ai/dsh-tool-result-pruner',
+  '@deepseek-ai/dsh-compaction',
+  '@deepseek-ai/dsh-tool-plugin-manager',
+  '@deepseek-ai/dsh-tool-plugin-market',
+  '@deepseek-ai/dsh-tool-ralph',
+  '@deepseek-ai/dsh-tool-subagent-claude-code',
+  'cordis:group',
 ]);
 
 /** Is this row's package provided by the harness rather than the profile? */
@@ -235,6 +266,35 @@ async function mcpRowsOwnedElsewhere(ctx) {
 }
 
 /**
+ * The plugin row ids that other presets already own.
+ *
+ * A plugin that registers a web route (dsh-image-gen registers
+ * /plugins/dsh-image-gen/subscription-login) cannot be mounted in two
+ * presets: the second mount fails with "duplicate exact route" and the
+ * preset shows BROKEN in the picker.
+ *
+ * @param ctx - the host context
+ * @returns a Set of plugin row ids owned by other presets
+ */
+function pluginRowsOwnedElsewhere(ctx) {
+  const owned = new Set();
+  const definitions = ctx.agentPresets?.definitions;
+  if (!definitions || typeof definitions.entries !== 'function') return owned;
+  for (const [id, record] of definitions) {
+    if (typeof id === 'string' && id.startsWith(OWNED_PREFIX)) continue; // our own
+    for (const row of record?.config?.plugins ?? []) {
+      if (typeof row?.id !== 'string') continue;
+      if (row.id.startsWith('mcp-')) continue;      // handled separately
+      if (row.id.startsWith('tool-')) continue;      // a schema, safe to repeat
+      if (row.id.startsWith('command-')) continue;   // a schema, safe to repeat
+      if (row.id.startsWith('skill-filesystem')) continue;
+      owned.add(row.id);
+    }
+  }
+  return owned;
+}
+
+/**
  * The capability fingerprints of the presets that already exist.
  *
  * @param ctx - the host context
@@ -274,6 +334,9 @@ async function registerCategoryPresets(ctx, categories, report) {
   // MCP rows another preset already owns. Carrying one again would start that
   // server a second time (see mcpRowsOwnedElsewhere).
   const ownedMcpRows = await mcpRowsOwnedElsewhere(ctx);
+  // Plugin rows another preset already carries. A plugin that registers a web
+  // route cannot be mounted twice.
+  const ownedPluginRows = pluginRowsOwnedElsewhere(ctx);
   // The capabilities existing presets already offer. A category that offers
   // exactly the same thing is the same entry twice in the picker.
   const existingFingerprints = fingerprintsOfExisting(ctx);
@@ -310,30 +373,64 @@ async function registerCategoryPresets(ctx, categories, report) {
       }
     }
 
-    // Drop MCP rows another preset already carries. The server would start a
-    // second time — 8 MCP processes instead of 4, measured 2026-10-22.
-    const duplicateMcp = rows.filter((row) => row.id.startsWith('mcp-') && ownedMcpRows.has(row.id));
-    if (duplicateMcp.length > 0) {
-      for (const row of duplicateMcp) {
-        report.notes.push(
-          `${presetId}: dropped "${row.id}" — another preset already carries that MCP server, ` +
-          'and an MCP row in two presets starts the server twice',
-        );
-      }
-      rows = rows.filter((row) => !duplicateMcp.includes(row));
+    // If what this preset WOULD offer is exactly what an existing preset
+    // already offers, do not register a second copy. Two entries offering the
+    // same capabilities are indistinguishable in the picker, and the user
+    // cannot tell which is the real one. Measured 2026-10-22: the picker
+    // showed "Creative (CAD / 3D / diagrams)" and "Creative (3D / diagrams)"
+    // side by side.
+    //
+    // The fingerprint is taken BEFORE the rows are filtered below: it must
+    // describe what the category is FOR, not what survived the filter.
+    const fingerprint = capabilityFingerprint(rows);
+    const cover = coveringPreset(fingerprint, existingFingerprints);
+    if (cover) {
+      report.notes.push(
+        `skipped "${presetId}": the existing "${cover}" preset already covers its capabilities — ` +
+        'registering it would show the same entry twice in the picker',
+      );
+      skipped += 1;
+      continue;
     }
 
-    // If what is left is exactly what an existing preset already offers, do
-    // not register a second copy. Two entries offering the same capabilities
-    // are indistinguishable in the picker, and the user cannot tell which is
-    // the real one. Measured 2026-10-22: the picker showed "Creative (CAD /
-    // 3D / diagrams)" and "Creative (3D / diagrams)" side by side.
-    const fingerprint = capabilityFingerprint(rows);
-    if (fingerprint && existingFingerprints.has(fingerprint)) {
+    // Drop rows that must not be mounted twice.
+    //
+    //  - an MCP row: the server would start a second time (8 MCP processes
+    //    instead of 4, measured 2026-10-22);
+    //  - a plugin row that another preset already carries AND that registers
+    //    a web route: mounting it twice makes the second mount fail with
+    //    "duplicate exact route" and the preset shows BROKEN in the picker
+    //    (dsh-image-gen did exactly this on 2026-10-22).
+    //
+    // A tool row may repeat — each preset is its own mount scope, and a tool
+    // is a schema, not a process.
+    const duplicateRows = rows.filter((row) => {
+      if (row.id.startsWith('mcp-')) return ownedMcpRows.has(row.id);
+      if (row.id.startsWith('tool-') || row.id.startsWith('command-')) return false;
+      if (row.id.startsWith('skill-filesystem')) return false;
+      return ownedPluginRows.has(row.id);
+    });
+    if (duplicateRows.length > 0) {
+      for (const row of duplicateRows) {
+        report.notes.push(
+          `${presetId}: dropped "${row.id}" — another preset already carries it, and mounting ` +
+          'the same plugin in two presets registers its web route twice',
+        );
+      }
+      rows = rows.filter((row) => !duplicateRows.includes(row));
+    }
+
+    // A preset that carries no DISTINCTIVE capability is noise in the picker.
+    // "Distinctive" means a capability of its own — an MCP server, a skill
+    // provider, or a plugin. The harness scaffolding every preset shares
+    // (persona, tool-bash, compaction) does not make a preset worth offering.
+    // Measured 2026-10-22: the document-skills category would have been
+    // registered as an empty entry, because those skills live in the
+    // always-on root every preset already carries.
+    if (!fingerprint) {
       report.notes.push(
-        `skipped "${presetId}": offers the same capabilities as the existing ` +
-        `"${existingFingerprints.get(fingerprint)}" preset — registering it would show the same ` +
-        'entry twice in the picker',
+        `skipped "${presetId}": it carries no capability of its own — the skills it names are ` +
+        'already supplied to every preset',
       );
       skipped += 1;
       continue;
