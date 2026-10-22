@@ -1,0 +1,20 @@
+# dsh-preset-categorizer bundle patch.
+#
+# The plugin registers one agent preset per category with the host's own
+# agentPresets registry. It adds NO tools of its own by default, so a
+# Standard session pays nothing for it.
+#
+# Mount this row inside the Creative preset (not in bundles) so the
+# categorizer only runs for sessions that asked for the creative set.
+- insert:
+    - id: preset-categorizer
+      name: dsh-preset-categorizer
+      config: {}
+      # The loader reads `inject` from the ENTRY ROW, not from the module's
+      # exports: Inject.resolve(fiber.entry.options.inject, fiber.inject).
+      # Without this the plugin cannot see ctx.agentPresets, and every
+      # registration fails with "cannot get property agentPresets without inject".
+      inject:
+        - loader
+        - agentPresets
+

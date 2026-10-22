@@ -1,0 +1,47 @@
+{
+  "name": "dsh-preset-categorizer",
+  "version": "0.1.0",
+  "description": "Categorize plugins, MCP servers and skills into DSH agent presets - so a capability set becomes a first-class preset in the GUI picker.",
+  "main": "./index.js",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "preset",
+    "categorize",
+    "mcp",
+    "skill"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible"
+      },
+      "node": ">=22"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anonamerjaxon-dev/dsh-preset-categorizer.git"
+  },
+  "homepage": "https://github.com/anonamerjaxon-dev/dsh-preset-categorizer#readme",
+  "bugs": {
+    "url": "https://github.com/anonamerjaxon-dev/dsh-preset-categorizer/issues"
+  },
+  "author": "JAXON",
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ]
+}
