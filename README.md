@@ -103,6 +103,13 @@ second is reported.
 
 ## Verify
 
+**Registration is opt-in.** With the default config (`registerPresets` unset) the
+plugin only writes the report — `registered: false` — and adds no presets to the
+picker. This machine runs in that mode deliberately (2026-10-31 report:
+`registered: false`, 234 capabilities, 19 skills), so "registered category
+presets: 0" in `dsh-health` is not a fault. Set `registerPresets: true` in the
+row config to actually register the `cat-*` presets.
+
 The plugin writes its own report, including the **host's own roster** with a
 `broken` flag per preset:
 
@@ -110,14 +117,17 @@ The plugin writes its own report, including the **host's own roster** with a
 cat ~/.dsh/preset-categorizer-report.json
 ```
 
+Shape (numbers are an example, not this machine's live count):
+
 ```json
 {
+  "registered": false,
   "report": {
-    "registered": 5,
-    "capabilities": 209,
-    "plugins": 194,
-    "mcps": 5,
-    "skills": 15
+    "capabilities": 234,
+    "plugins": 215,
+    "mcps": 0,
+    "skills": 19,
+    "notes": ["preset registration is disabled (registerPresets is not true) …"]
   },
   "roster": [
     { "id": "cat-docs", "name": "Documents (office / pdf)" },
